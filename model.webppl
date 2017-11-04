@@ -1,0 +1,89 @@
+var group_1_size = 5;
+var group_2_size = 5;
+
+var within_group_1_prob = 0.5;
+var within_group_2_prob = 0.5;
+var across_prob = 0.5;
+var collective_prob = 0.5;
+
+var utterances = ["null", "eachother"];
+var interps = ["within", "across", "collective"];
+
+var min = function(x, y) {
+  x < y ? x : y;
+}
+
+var factorial = cache(function(n) {
+  product(mapIndexed(function(i, v) { i + 1 },
+                     repeat(n, function() { return 0 })));
+});
+
+var nchoosek = function(n, k) {
+  return (factorial(n) / factorial(k) / factorial(n - k));
+}
+
+var statePrior = Infer({model: function() {
+  var within_group_1_pairs = nchoosek(group_1_size, 2);
+  var within_group_2_pairs = nchoosek(group_2_size, 2);
+  
+  var across_group_pairs = group_1_size * group_2_size;
+  
+  var group_1_portion =
+      Binomial({p: within_group_1_prob, n: within_group_1_pairs}).sample() / within_group_1_pairs;
+  var group_2_portion = 
+      Binomial({p: within_group_2_prob, n: within_group_2_pairs}).sample() / within_group_2_pairs;
+  var across_portion = 
+      Binomial({p: across_prob, n: across_group_pairs}).sample() / across_group_pairs;
+  
+  
+  return {
+    group1: group_1_portion,
+    group2: group_2_portion,
+    across: across_portion,
+    collective: Bernoulli({p: collective_prob}).sample()
+  }
+}});
+
+var utterancePrior = function() {
+  return uniformDraw(utterances);
+}
+
+var interpPrior = function() {
+  return uniformDraw(interps)
+}
+
+var meaning = function(utterance, state, theta_w, theta_a, interp) {
+  if (utterance === "eachother") {
+    if (interp === "within") {
+      return state.group1 > theta_w && state.group2 > theta_a;
+    } else if (interp === "across") {
+      return state.across > theta_a;
+    } else if (interp === "collective") {
+      return state.collective;
+    }
+  } else if (utterance === "null") {
+    return true;
+  }
+}
+
+var literalListener = cache(function(utterance, theta_w, theta_a, interp) {
+  Infer({method: "enumerate"}, function() {
+    var state = statePrior.sample()
+    condition(meaning(utterance, state, theta_w, theta_a, interp));
+    return state;
+  });
+});
+
+var alpha = 1;
+
+var pragmaticSpeaker = cache(function(state, theta_w, theta_a, interp) {
+  return Infer({model: function() {
+    var utterance = utterancePrior();
+    factor(alpha * literalListener(utterance, theta_w, theta_a, interp).score(state));
+    return utterance
+  }});
+});
+
+var p = function() { return statePrior.sample() };
+
+viz.table(marginalize(Infer({model: p}), "collective"))
