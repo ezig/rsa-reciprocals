@@ -1,0 +1,166 @@
+// Helper functions for computing number of pairs
+var factorial = cache(function(n) {
+  product(mapIndexed(function(i, v) { i + 1 },
+                     repeat(n, function() { return 0 })));
+});
+
+var nchoosek = function(n, k) {
+  return (factorial(n) / factorial(k) / factorial(n - k));
+}
+//
+
+// Number of individuals in each of the two groups
+var group_1_size = 3;
+var group_2_size = 3;
+
+// Prior probability that the event would occur between
+// a pair of the same group (for example, in the sentence
+// "The boys and the girls met each other", the first probability is the
+// prior probability that two boys would meet and the second probability)
+var within_group_1_prob = 0.4;
+var within_group_2_prob = 0.6;
+
+// Prior probability that the event would occur between any pair
+// across groups (for example, in "the boys and the girls met each other",
+// it's the prior probability that a boy and a girl would meet from the two groups)
+var across_prob = 0.2;
+var collective_prob = 0.5;
+
+var utterances = ["null", "eachother"];
+
+// Possible interpretations of "eachother"
+var interps = ["within", "across", "collective"];
+
+var utterancePrior = function() {
+  return uniformDraw(utterances);
+}
+
+var interpPrior = function() {
+  return uniformDraw(interps)
+}
+
+// Threshold on how many pairs within each group need to satisfy the predicate
+// for the within group interpretation to be literally true
+// Within-group threshold prior is uniform over the number of pairs in the group
+// TODO: Right now there is a single within-group threshold prior which
+// means that the groups have to be the same size for it to make any sense
+var thetaWPrior = function() {
+  var within_group_1_pairs = nchoosek(group_1_size, 2);
+  return sample(RandomInteger({n: within_group_1_pairs}));
+}
+
+// Thershold on how many pairs across groups need to satisfy the predicate
+// for the across group interpretation to be literally true
+// Across-group threshold prior is uniform over the number of pairs across groups
+var thetaAPrior = function() {
+  var across_group_pairs = group_1_size * group_2_size;
+  return sample(RandomInteger({n: across_group_pairs}));
+}
+
+// Given either group 1 or group 2, sample from the prior on how many
+// pairs the predicate holds on within that group
+var within_group_prior = function(group_num) {
+  if (group_num == 1) {
+    // Calculate how many pairs there are in the group
+    var within_group_1_pairs = nchoosek(group_1_size, 2);
+    // Prior distribution is <number of pairs> bernoulli trials each
+    // of which has prior probability set above
+    return sample(Binomial({p: within_group_1_prob, n: within_group_1_pairs}));
+  } else {
+    var within_group_2_pairs = nchoosek(group_1_size, 2);
+    return sample(Binomial({p: within_group_2_prob, n: within_group_2_pairs}));
+  }
+}
+
+// Sample from the prior on how many across-group pairs the predicate holds on
+var across_group_prior = function() {
+  // Number of pairs is members of group 1 * members of group 2
+  var across_group_pairs = group_1_size * group_2_size;
+  return sample(Binomial({p: across_prob, n: across_group_pairs}));
+}
+
+// Sample from prior on whether or not collective event holds
+var collective_prior = function() {
+  return sample(Bernoulli({p: collective_prob}))
+}
+
+// Put all of the different state priors together for convenience
+var statePrior = function() {
+  return {
+    group1: within_group_prior(1),
+    group2: within_group_prior(2),
+    across: across_group_prior(),
+    collective: collective_prior()
+  }
+}
+
+// Literal meaning of utterance given the utterance, state, two thresholds, 
+// and which interpretation to use
+var meaning = function(utterance, state, theta_w, theta_a, interp) {
+  if (utterance === "eachother") {
+    if (interp === "within") {
+      return ((state.group1 > theta_w) && (state.group2 > theta_w));
+    } else if (interp === "across") {
+      return state.across > theta_a;
+    } else if (interp === "collective") {
+      return state.collective;
+    }
+  } else if (utterance === "null") {
+    return true;
+  }
+}
+
+// Literal listener samples a state and conditions on truth value
+var literalListener = cache(function(utterance, theta_w, theta_a, interp) {
+  Infer({method: "enumerate"}, function() {
+    var state = statePrior();
+    condition(meaning(utterance, state, theta_w, theta_a, interp));
+    return state;
+  });
+});
+
+// Pragmatic speaker samples an utterance and factors based on listener informativity
+var alpha1 = 1;
+var pragmaticSpeaker = cache(function(state, theta_w, theta_a, interp) {
+  return Infer({model: function() {
+    var utterance = utterancePrior();
+    factor(alpha1 * literalListener(utterance, theta_w, theta_a, interp).score(state));
+    return utterance
+  }});
+});
+
+// Pragmatic listener jointly infers the state, two thresholds, and which
+// interpretation to use, and factors based on pragmatic speaker
+var pragmaticListener = cache(function(utterance) {
+  return Infer({model: function() {
+    /// priors ///
+    var state = statePrior();
+    var theta_w = thetaWPrior();
+    var theta_a = thetaAPrior();
+    var interp = interpPrior();
+    //////////////
+    
+    factor(pragmaticSpeaker(state, theta_w, theta_a, interp).score(utterance))
+    return state;
+  }})
+});
+
+// S2 is given a state, samples an utterance, and factors based on informativity
+// to the pragmatic listener (models speaker endorsement in a truth-value judgement)
+var alpha2 = 1;
+var s2 = cache(function(state) {
+  return Infer({model: function() {
+    var utterance = utterancePrior();
+    factor(alpha2 * pragmaticListener(utterance).score(state))
+    return utterance;
+  }});
+})
+
+var state = {
+  group1: 1,
+  group2: 1,
+  across: 2,
+  collective: true
+}
+
+s2(state)
