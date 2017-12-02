@@ -10,20 +10,20 @@ var nchoosek = function(n, k) {
 //
 
 // Number of individuals in each of the two groups
-var group_1_size = 3;
-var group_2_size = 3;
+var group_1_size = 4;
+var group_2_size = 4;
 
 // Prior probability that the event would occur between
 // a pair of the same group (for example, in the sentence
 // "The boys and the girls met each other", the first probability is the
 // prior probability that two boys would meet and the second probability)
-var within_group_1_prob = 0.4;
-var within_group_2_prob = 0.6;
+var within_group_1_prob = 0.7;
+var within_group_2_prob = 0.8;
 
 // Prior probability that the event would occur between any pair
 // across groups (for example, in "the boys and the girls met each other",
 // it's the prior probability that a boy and a girl would meet from the two groups)
-var across_prob = 0.2;
+var across_prob = 0.9;
 
 var utterances = ["null", "eachother"];
 
@@ -130,7 +130,7 @@ var literalListener = cache(function(utterance, theta_w, theta_a, coll, group_in
 // Pragmatic speaker samples an utterance and factors based on listener informativity
 var alpha1 = 1;
 var pragmaticSpeaker = cache(function(state, theta_w, theta_a, coll, group_interp) {
-  return Infer({model: function() {
+  return Infer({method: 'enumerate', model: function() {
     var utterance = utterancePrior();
     factor(alpha1 * literalListener(utterance, theta_w, theta_a, coll, group_interp)
            .score(state));
@@ -141,7 +141,7 @@ var pragmaticSpeaker = cache(function(state, theta_w, theta_a, coll, group_inter
 // Pragmatic listener jointly infers the state, two thresholds, and which
 // interpretation to use, and factors based on pragmatic speaker
 var pragmaticListener = cache(function(utterance) {
-  return Infer({model: function() {
+  return Infer({method: 'enumerate', model: function() {
     /// priors ///
     var state = statePrior();
     var theta_w = thetaWPrior();
@@ -152,7 +152,15 @@ var pragmaticListener = cache(function(utterance) {
     
     factor(pragmaticSpeaker(state, theta_w, theta_a, coll, group_interp)
            .score(utterance))
-    return state;
+    
+    var return_state = {
+      group1: state.group1,
+      group2: state.group2,
+      across: state.across,
+      group_interp: group_interp
+    };
+    
+    return return_state;
   }})
 });
 
@@ -160,17 +168,42 @@ var pragmaticListener = cache(function(utterance) {
 // to the pragmatic listener (models speaker endorsement in a truth-value judgement)
 var alpha2 = 1;
 var s2 = cache(function(state) {
-  return Infer({model: function() {
+  return Infer({method: 'enumerate', model: function() {
     var utterance = utterancePrior();
-    factor(alpha2 * pragmaticListener(utterance).score(state))
-    return utterance;
+    var listener_post = pragmaticListener(utterance)
+    
+    if (state.group_interp === "across") {
+      var listener_marg = marginalize(listener_post,
+                                      function(x) {
+        return {
+          across: x.across,
+          group_interp: x.group_interp
+        }
+      });
+      
+      factor(alpha2 * listener_marg.score(state))
+      return utterance;
+    } else {
+      var listener_marg = marginalize(listener_post,
+                                      function(x) {
+        return {
+          group1: x.group1,
+          group2: x.group2,
+          group_interp: x.group_interp
+        }
+      });
+      
+      factor(alpha2 * listener_marg.score(state))
+      return utterance;
+    }
   }});
 })
 
 var state = {
-  group1: 1,
-  group2: 1,
-  across: 2,
+  across: 4,
+  group_interp: "across"
 }
 
-s2(state)
+marginalize(pragmaticListener("eachother"), "group_interp");
+
+// s2(state)
