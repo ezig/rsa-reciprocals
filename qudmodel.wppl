@@ -1,3 +1,4 @@
+///fold:
 // Helper functions for computing number of pairs
 var factorial = cache(function(n) {
   product(mapIndexed(function(i, v) { i + 1 },
@@ -7,10 +8,26 @@ var factorial = cache(function(n) {
 var nchoosek = cache(function(n, k) {
   return (factorial(n) / factorial(k) / factorial(n - k));
 });
-//
+///
+
+// Number of individuals in each of the two salient groups
+var group_1_size = 3;
+var group_2_size = 3;
+
+// Number of pairs within and across groups
+var group_1_pairs = nchoosek(group_1_size, 2);
+var group_2_pairs = nchoosek(group_2_size, 2);
+var across_pairs = group_1_size * group_2_size;
+
+// Two possible interpretations of domain of reciprocity
+var group_interp = ["within", "across"];
+
+var groupInterpPrior = function() {
+  return categorical([1, 1], group_interp);
+}
 
 var contextPriors = {
-  "classroom.interact" : {
+  "classroom.taught" : {
     within_group_1_prob: 0.8,
     within_group_2_prob: 0.8,
     across_prob: 0.2
@@ -52,43 +69,18 @@ var contextPriors = {
   },
 }
 
-// Number of individuals in each of the two groups
-var group_1_size = 4;
-var group_2_size = 4;
-
-var utterances = ["null", "eachother"];
-
-// Two possible group interpretations for "eachother"
-var group_interp = ["within", "across"];
-
-var quds = ["all", "any", "most"];
-
-var utterancePrior = function() {
-  return uniformDraw(utterances);
-}
-
-var groupInterpPrior = function() {
-  return uniformDraw(group_interp);
-}
-
-var qudPrior = function() {
-  return uniformDraw(quds);
-}
-
-// Given either group 1 or group 2, sample from the prior on how many
+// Given either group 1 or group 2, sample from the prior for how many
 // pairs the predicate holds on within that group
 var within_group_prior = function(group_num, context) {
+  // Get the prior information for the context
   var cp = contextPriors[context];
   
   if (group_num == 1) {
-    // Calculate how many pairs there are in the group
-    var within_group_1_pairs = nchoosek(group_1_size, 2);
-    // Prior distribution is <number of pairs> bernoulli trials each
-    // of which has prior probability set above
-    return sample(Binomial({p: cp.within_group_1_prob, n: within_group_1_pairs}));
+    // Prior distribution is <number of pairs> independent coin flips
+    // where each flip has fixed probability determined from context prior
+    return sample(Binomial({p: cp.within_group_1_prob, n: group_1_pairs}));
   } else {
-    var within_group_2_pairs = nchoosek(group_1_size, 2);
-    return sample(Binomial({p: cp.within_group_2_prob, n: within_group_2_pairs}));
+    return sample(Binomial({p: cp.within_group_2_prob, n: group_2_pairs}));
   }
 }
 
@@ -96,9 +88,8 @@ var within_group_prior = function(group_num, context) {
 var across_group_prior = function(context) {
   var cp = contextPriors[context];
   
-  // Number of pairs is members of group 1 * members of group 2
-  var across_group_pairs = group_1_size * group_2_size;
-  return sample(Binomial({p: cp.across_prob, n: across_group_pairs}));
+  // Flip coins again
+  return sample(Binomial({p: cp.across_prob, n: across_pairs}));
 }
 
 // Put all of the different state priors together for convenience
@@ -110,44 +101,68 @@ var statePrior = function(context) {
   }
 }
 
+// Possible QUDs
+var quds = ["all", "any", "most", "howMany"];
+
+var qudPrior = function() {
+  return categorical([1, 1, 1, 1], quds)
+}
+
 var isAll = function(state, group_interp) {
   if (group_interp === "within") {
-    var within_group_1_pairs = nchoosek(group_1_size, 2);
-    var within_group_2_pairs = nchoosek(group_2_size, 2);
-    
-    return (state.group1 === within_group_1_pairs
-            && state.group2 === within_group_2_pairs);
+    return (state.group1 === group_1_pairs
+            && state.group2 === group_2_pairs);
   } else if (group_interp === "across") {
-    var across_group_pairs = group_1_size * group_2_size;
-    return state.across === across_group_pairs;
+    return state.across === across_pairs;
   }
 }
 
-var qudFns = {
-  any : function(state, group_interp) {
+var isAny = function(state, group_interp) {
     if (group_interp === "within") {
       return (state.group1 > 0 && state.group2 > 0);
     } else if (group_interp === "across") {
       return (state.across > 0);
     }
-  },
-  most : function(state, group_interp) {
-    if (group_interp === "within") {
-      var within_group_1_pairs = nchoosek(group_1_size, 2);
-      var within_group_2_pairs = nchoosek(group_2_size, 2);
-      
-      return (state.group1 >= (within_group_1_pairs / 2)
-      && state.group2 >= (within_group_2_pairs / 2));
-    } else if (group_interp === "across") {
-      var across_group_pairs = group_1_size * group_2_size;
-      return state.across >= (across_group_pairs / 2);
-    }
-  },
-  all : isAll
 }
 
-// Literal meaning of utterance given the utterance, state, two thresholds, 
-// and which interpretation to use
+var isMost = function(state, group_interp) {
+  if (group_interp === "within") {
+    return (state.group1 >= (group_1_pairs / 2)
+            && state.group2 >= (group_2_pairs / 2));
+  } else if (group_interp === "across") {
+    return state.across >= (across_pairs / 2);
+  }
+}
+
+var howMany = function(state, group_interp) {
+  if (group_interp === "within") {
+    return {
+      group1: state.group1,
+      group2: state.group2
+    }
+  } else {
+    return {
+      across: state.across
+    }
+  }
+}
+
+var qudFns = {
+  any : isAny,
+  most : isMost,
+  all : isAll,
+  howMany: howMany
+};
+
+
+// Speaker can say sentence involving "each other" or nothing
+var utterances = ["null", "eachother"];
+
+var utterancePrior = function() {
+  return uniformDraw(utterances);
+}
+
+// Literal meaning of utterance given the utterance, state, group_interp
 var meaning = function(utterance, state, group_interp) {
   if (utterance === "eachother") {
     return isAll(state, group_interp);
@@ -157,13 +172,13 @@ var meaning = function(utterance, state, group_interp) {
 }
 
 // Literal listener samples a state and conditions on truth value
+// Returns qudValue
 var literalListener = cache(function(utterance, group_interp, qud, context) {
   Infer({method: "enumerate"}, function() {
     var state = statePrior(context);
     condition(meaning(utterance, state, group_interp));
     
     var qudFn = qudFns[qud]
-    
     return qudFn(state, group_interp);
   });
 });
@@ -194,8 +209,8 @@ var pragmaticListener = cache(function(utterance, context) {
     
     observe(pragmaticSpeaker(qudValue, group_interp, qud, context), utterance);
     
-    return state;
-  }})
+    return state;   
+  }});
 });
 
 // S2 is given a state, samples an utterance, and factors based on informativity
@@ -212,7 +227,7 @@ var s2 = cache(function(state, context) {
 var state = {
   group1: 3,
   group2: 3,
-  across: 8
+  across: 0
 }
 
-s2(state, "sports.congratulated");
+s2(state, "classroom.taught");
